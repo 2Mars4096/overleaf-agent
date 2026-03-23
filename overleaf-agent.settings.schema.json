@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/overleaf-agent.settings.schema.json",
+  "title": "Overleaf Agent Settings",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "defaultProfile": {
+      "type": "string"
+    },
+    "baseUrl": {
+      "type": "string"
+    },
+    "socketUrl": {
+      "type": "string"
+    },
+    "cookieHeader": {
+      "type": "string"
+    },
+    "csrfToken": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "projectName": {
+      "type": "string"
+    },
+    "fileId": {
+      "type": "string"
+    },
+    "docId": {
+      "type": "string"
+    },
+    "filePath": {
+      "type": "string"
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "json": {
+      "type": "boolean"
+    },
+    "dryRun": {
+      "type": "boolean"
+    },
+    "sendMutations": {
+      "type": "boolean"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "method": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "headers": {
+      "$ref": "#/$defs/stringMap"
+    },
+    "endpoints": {
+      "$ref": "#/$defs/stringMap"
+    },
+    "methods": {
+      "$ref": "#/$defs/stringMap"
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "baseUrl": {
+          "type": "string"
+        },
+        "socketUrl": {
+          "type": "string"
+        },
+        "cookieHeader": {
+          "type": "string"
+        },
+        "csrfToken": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "fileId": {
+          "type": "string"
+        },
+        "docId": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "json": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "sendMutations": {
+          "type": "boolean"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "headers": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "endpoints": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "methods": {
+          "$ref": "#/$defs/stringMap"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

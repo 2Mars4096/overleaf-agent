@@ -2,22 +2,32 @@
 
 ## Purpose
 
-Define the MVP authentication approach for the Overleaf editor extension.
+Define the cookie-backed authentication approach used by this repo's Overleaf agent skill and any later integrations that reuse the same request workflow.
 
-The MVP will not implement a full embedded login flow. It will accept an existing authenticated Overleaf session from the user, store it securely, validate it, and reuse it for project and file requests.
+The current skill does not implement a full embedded login flow. It accepts an existing authenticated Overleaf session from the user, validates it, and reuses it for project and file requests.
+
+For local usage, the repo now supports an editable JSON settings file such as `overleaf-agent.settings.json`. That file is a convenience layer for operator-controlled secrets and defaults, not a substitute for host secret storage when a real host integration is available.
+
+Persistent local settings should usually stop at session-level data:
+- `cookieHeader`
+- `baseUrl` only when not using the hosted default
+- optional `socketUrl` only when the realtime endpoint is not `<baseUrl>/socket.io`
+- optional `csrfToken` if a live workflow already recovered one
+
+Project and document identifiers should usually be selected per action after the user chooses a target.
 
 ## MVP Decision
 
-Use a cookie-backed session as the default V1 authentication path.
+Use a cookie-backed session as the default initial authentication path.
 
-This is the fastest route to a working prototype because it avoids:
+This is the fastest route to a working reusable workflow because it avoids:
 - browser-login/OAuth work
-- password handling inside the extension
+- password handling inside the agent host
 - tight coupling to an unstable sign-in flow
 
 ## MVP Boundary
 
-The first auth-enabled editor flow only needs to support writable text project files such as:
+The first write-capable automation flow only needs to support writable text project files such as:
 - `.tex`
 - `.bib`
 - `.sty`
@@ -30,11 +40,16 @@ Binary assets can be listed in the project tree, but they do not need full edita
 
 Treat auth as a session bundle, not as "just one cookie."
 
-The extension may need:
+The workflow may need:
 - one or more cookies
 - a CSRF token
 - request headers expected by the web app
 - additional bootstrap state for writes or remote-refresh channels
+
+Hosted Overleaf live validation added one more concrete requirement for the realtime polling path:
+- the socket handshake may return an extra load-balancer affinity cookie such as `GCLB`
+- the realtime client must retain and resend that cookie on later polling requests
+- replaying only the imported browser cookie bundle can fail with `client not handshaken`
 
 ## Trusted Host Boundary
 
@@ -43,11 +58,36 @@ The extension may need:
 - Assume the realtime socket path belongs to the same deployment and uses the same signed session cookie unless a live hosted probe proves the deployment splits it onto a separate origin.
 - Never forward imported cookies or CSRF tokens to any non-Overleaf or third-party host.
 
+## How To Retrieve The Cookie Header
+
+Preferred method:
+- open Overleaf in a browser where the user is already signed in
+- open Developer Tools and switch to the `Network` tab
+- reload the page or open a project
+- select an authenticated request to the same Overleaf host
+- copy the full `Cookie` request header value
+
+Use that exact copied header value as `cookieHeader`.
+
+Why this is preferred:
+- it captures the real cookie bundle the browser is currently sending
+- it avoids hard-coding one cookie name when the deployment may use several
+- it is less error-prone than rebuilding the header manually from the cookie storage panel
+
+Fallback method:
+- inspect the browser's cookie storage for the Overleaf site
+- copy the relevant cookies and join them into one header string like `name1=value1; name2=value2`
+
+Security reminder:
+- treat the copied cookie header like a password
+- keep it in local secret storage or a gitignored local settings file only
+- never commit it or paste it into public logs
+
 ## User Flow
 
 ### 1. Import Session
 
-Expose a command such as `Overleaf: Import Session`.
+Expose or document a session-import step appropriate to the host environment.
 
 For MVP, support pasting a raw `Cookie` header string:
 
@@ -60,7 +100,7 @@ cookie_a=value_a; cookie_b=value_b; cookie_c=value_c
 After import, make a lightweight authenticated request to confirm:
 - the cookies are accepted
 - the account is authenticated
-- the extension can reach an authenticated project endpoint
+- the current workflow can reach an authenticated project endpoint
 
 Current source-verified first probe:
 - `GET /user/projects`
@@ -82,7 +122,13 @@ Current source-verified expectation:
 
 ### 4. Persist Securely
 
-Store sensitive session material in editor secret storage.
+Store sensitive session material in host-appropriate secret storage whenever the environment provides it.
+
+For local CLI usage without host secret storage:
+- keep secrets in a gitignored local settings file such as `overleaf-agent.settings.json`
+- do not commit that file
+- prefer placeholders in `overleaf-agent.settings.example.json`
+- prefer storing target object ids only when the operator explicitly wants sticky defaults
 
 Never store cookies or tokens in:
 - `settings.json`
@@ -123,14 +169,14 @@ Notes:
 
 ### Secret Storage
 
-Use editor secret storage for:
+Use host secret storage when available for:
 - cookie header
 - CSRF token
 - any other sensitive session artifact
 
 ### Non-Secret Storage
 
-Regular extension storage can hold:
+Regular host storage can hold:
 - validation timestamp
 - selected account metadata
 - last-used project id
@@ -165,12 +211,20 @@ For file updates:
 Current source-verified caveat:
 - no public cookie-auth HTTP text-write route has been confirmed yet
 - the inspected upstream code routes document writes through the real-time socket path after project/doc join
+- the local CLI now implements that path as `npm run discovery -- edit ...`
+- hosted Overleaf live validation confirmed that the realtime polling flow also depends on a handshake-time affinity cookie, so the socket helper keeps an in-memory cookie jar for the session
 
 Current minimum header set for CSRF-protected web `POST`s:
 - required: `Cookie`
 - required when protected: `X-Csrf-Token`
 - required for JSON payloads: `Content-Type: application/json`
 - `Origin` and `Referer` stay optional until a live hosted probe proves they are enforced
+
+Current locally implemented mutation routes:
+- `edit` joins a project and document over realtime socket.io v0, then sends `applyOtUpdate`
+- `add-doc` and `add-folder` call the web `POST` routes after resolving the parent folder id from the realtime snapshot
+- `rename`, `move`, and `delete` resolve entity ids from the realtime snapshot, then call the CSRF-protected web routes
+- all mutation commands stay guarded behind `sendMutations=true` or `--send`
 
 ### Near-Realtime Requests
 
@@ -185,7 +239,7 @@ Current source-verified caveat:
 
 ## Discovery Deliverable
 
-Before extension implementation starts, capture one validated request contract that records:
+Before write-enabled automations or deeper integrations start, capture one validated request contract that records:
 - session validation request
 - project list request
 - project file tree request
@@ -194,7 +248,7 @@ Before extension implementation starts, capture one validated request contract t
 - required cookies, headers, and CSRF behavior
 - whether remote refresh can stay HTTP-only for MVP
 
-This can live as notes inside the tracking docs, but it should be concrete enough that the extension work is wiring, not guesswork.
+This can live as notes inside the tracking docs, but it should be concrete enough that follow-on integrations are wiring, not guesswork.
 
 Current canonical contract doc:
 - `docs/overleaf-request-contract.md`
@@ -214,6 +268,8 @@ The executable discovery checklist is tracked in [2-1-overleaf-request-discovery
 
 Current live-probe entrypoint:
 - `npm run discovery`
+- the CLI auto-loads `overleaf-agent.settings.json` or `.overleaf-agent.json` if present
+- the first live mutation should happen in a throwaway project or disposable document with `dryRun: false`
 
 ## Auth Abstraction
 
@@ -236,9 +292,9 @@ Possible later implementation:
 
 ## Suggested Implementation Order
 
-1. Reproduce the authenticated request flow outside the extension with a repeatable manual or scripted probe.
-2. Add a secret-storage wrapper.
-3. Add `Overleaf: Import Session`.
+1. Reproduce the authenticated request flow with a repeatable manual or scripted probe.
+2. Add a host-appropriate secret-storage wrapper.
+3. Add a session-import command or documented workflow for the chosen host.
 4. Save the raw cookie header securely.
 5. Implement one authenticated validation request.
 6. Extract CSRF state if required.
@@ -248,7 +304,7 @@ Possible later implementation:
 
 ## Open Questions
 
-- Should the extension accept raw cookie headers only, or also exported cookie formats later?
+- Should the workflow accept raw cookie headers only, or also exported cookie formats later?
 - Do we need account scoping if users import cookies from multiple Overleaf accounts?
 - Should validation happen on startup or lazily on first use?
 - Can the hosted target instance reuse the same signed session cookie for realtime joins exactly as the upstream source suggests?

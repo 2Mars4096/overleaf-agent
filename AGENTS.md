@@ -1,25 +1,36 @@
-# Project Tracking
+# Overleaf Agent
 
-Use the tracking system in `docs/` and keep it current as work progresses.
+Use this repo when the user wants to work with Overleaf through an imported browser session.
 
-## Read At Session Start
-1. `docs/todo.md`
-2. The active file in `docs/plans/`
-3. The latest entries in `docs/changelog.md`
-4. `docs/architecture.md`
-5. `docs/development-plan.md` when scope or roadmap matters
-6. `docs/auth-notes.md` when touching auth or session work
+The user-facing workflow should be natural language. Run the local Overleaf tool internally and only expose raw commands when the user explicitly asks for manual CLI usage or debugging details.
 
-## Update After Meaningful Changes
-- Check off completed tasks in the active plan file
-- Update `docs/todo.md`
-- Add a newest-first entry to `docs/changelog.md`
-- Update `docs/architecture.md` for structure or convention changes
-- Update `docs/bugs.md` for bugs, risks, or failed approaches
-- Update `docs/development-plan.md`, `docs/auth-notes.md`, or `README.md` when relevant
+## Workflow
 
-## Plan Rules
-- Plans live in `docs/plans/` using hierarchical numbering such as `1-name.md` and `1-1-name.md`
-- Keep future work in `docs/todo.md` as one-liners until it is ready to start
-- Keep docs concise and prefer bullets over long prose
-- Never delete changelog history or failed-approach notes
+1. Use one trusted Overleaf base URL per task.
+   Default to `https://www.overleaf.com` unless the user is on a self-hosted deployment.
+2. Treat the raw `Cookie` header as opaque and secret.
+3. Prefer saving the cookie through the local `connect` flow instead of asking the user to edit files manually.
+   Use `overleaf-agent.settings.json` only for gitignored local defaults.
+4. Prefer the local Overleaf CLI internally over hand-built requests.
+   Typical internal commands:
+   - `npm run overleaf -- status`
+   - `npm run overleaf -- connect --cookie-stdin`
+   - `npm run overleaf -- validate`
+   - `npm run overleaf -- projects`
+   - `npm run overleaf -- use-project "<project name or id>"`
+   - `npm run overleaf -- snapshot`
+   - `npm run overleaf -- read --file-path /main.tex`
+   - `npm run overleaf -- edit --file-path /main.tex --text-file ./main.tex`
+   - `npm run overleaf -- add-doc --file-path /drafts/new.tex`
+   - `npm run overleaf -- extract-csrf`
+5. Treat live mutations as guarded work.
+   Hosted Overleaf validation now covers `validate`, `projects`, `snapshot`, `read`, `add-doc`, and realtime `edit` in a disposable project.
+   `add-folder`, `rename`, `move`, `delete`, upload/asset handling, and refresh policy still need more validation.
+
+## Guardrails
+
+- Never print full cookies or CSRF tokens.
+- Never commit a live `overleaf-agent.settings.json` file.
+- Never forward imported auth material to non-Overleaf hosts.
+- Do not describe this repo as a finished editor integration.
+- Use `SKILL.md`, `docs/overleaf-request-contract.md`, and `docs/auth-notes.md` for the canonical workflow and current contract.

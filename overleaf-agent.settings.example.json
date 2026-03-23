@@ -1,0 +1,20 @@
+{
+  "$schema": "./overleaf-agent.settings.schema.json",
+  "defaultProfile": "personal",
+  "baseUrl": "https://www.overleaf.com",
+  "timeoutMs": 15000,
+  "dryRun": false,
+  "sendMutations": false,
+  "headers": {
+    "Accept-Language": "en-US,en;q=0.9"
+  },
+  "profiles": {
+    "personal": {
+      "cookieHeader": "paste-the-full-Cookie-request-header-here"
+    },
+    "self-hosted": {
+      "baseUrl": "https://overleaf.example.com",
+      "cookieHeader": "paste-the-full-Cookie-request-header-here"
+    }
+  }
+}

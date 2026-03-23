@@ -1,13 +1,14 @@
 # Overleaf Request Contract
 
-**Status:** source-verified on 2026-03-23 from public Overleaf upstream code; live cookie-backed validation is still required before extension implementation starts.
+**Status:** source-verified on 2026-03-23 from public Overleaf upstream code, implemented locally in the discovery CLI, and partially live-validated on hosted Overleaf on 2026-03-23. Hosted validation now covers `GET /user/projects`, realtime project snapshot, HTTP doc download, disposable `POST /project/:id/doc`, and disposable realtime `applyOtUpdate`. `add-folder`, `rename`, `move`, `delete`, upload/asset handling, and refresh policy still need more live validation.
 
 ## Auth Prerequisites
 
 - Treat the imported `Cookie` header as opaque.
 - Overleaf Community Edition defaults to the signed session cookie name `overleaf.sid`.
-- Hosted or legacy deployments may expose a different session cookie name in the browser, so the extension should not hard-code the cookie key.
+- Hosted or legacy deployments may expose a different session cookie name in the browser, so the workflow should not hard-code the cookie key.
 - The real-time service binds websocket sessions to the same signed session cookie used by the web app.
+- Hosted Overleaf's realtime polling path also sets a handshake-time load-balancer cookie (observed: `GCLB`), and the client must resend it on later polling requests.
 - Mutating web routes are CSRF-protected by default.
 - The frontend sends the CSRF token in `X-Csrf-Token`.
 - The CSRF token can be extracted from an authenticated HTML page via the `ol-csrfToken` meta tag.
@@ -58,6 +59,7 @@
 - `socket.io handshake with ?projectId=...`
 - Purpose: the real-time service auto-joins the project and returns the richer project snapshot in `joinProjectResponse`.
 - Note: this is where the upstream client gets `rootFolder`, nested folders, files, docs, and root doc ids.
+- Hosted validation note: the polling session must keep the handshake-issued affinity cookie or the server responds with `client not handshaken`.
 
 ### Text Read
 
@@ -72,6 +74,7 @@
   - join the document
   - send `applyOtUpdate`
 - The direct document text-write HTTP route exists only on the private API and is intended for internal service-to-service use.
+- The local CLI now exposes this as `npm run discovery -- edit ...`.
 
 ### Version And Refresh Signals
 
@@ -97,13 +100,14 @@
 
 - Use `npm run discovery -- contract` to print the current source-verified contract.
 - Use `npm run discovery -- validate --base-url <url> --cookie '<cookie>'` for the first live session check.
+- Use `npm run discovery -- snapshot --base-url <url> --cookie '<cookie>' --project-id <id>` to recover the richer realtime project tree with ids.
+- Use `npm run discovery -- read --base-url <url> --cookie '<cookie>' --project-id <id> --file-path /main.tex` when you want path-based doc reads without supplying raw doc ids.
+- Use `npm run discovery -- edit --base-url <url> --cookie '<cookie>' --project-id <id> --file-path /main.tex --text-file ./main.tex --send` for the guarded realtime text-write flow.
+- Use `npm run discovery -- add-doc`, `add-folder`, `rename`, `move`, and `delete` for guarded project mutations after validating a throwaway target.
 - Use `npm run discovery -- extract-csrf --base-url <url> --cookie '<cookie>' --project-id <id>` to recover a live CSRF token from an authenticated HTML page.
-- Use `npm run discovery -- read --base-url <url> --cookie '<cookie>' --project-id <id> --doc-id <doc-id>` to verify text download for a known document id.
 
 ## Remaining Live Checks
 
-- Capture a real cookie-backed session from the target Overleaf host.
-- Confirm that the hosted instance accepts the same validation and read routes.
-- Confirm how to obtain the full project tree on the hosted instance in a way the extension can reproduce safely.
-- Confirm one safe write against a throwaway project or file.
+- Validate `add-folder`, `rename`, `move`, and `delete` against a disposable hosted project.
 - Decide whether refresh can stay HTTP-polling-only, or whether the MVP must depend on the real-time socket path.
+- Confirm how much of the same contract carries over to self-hosted Overleaf deployments.

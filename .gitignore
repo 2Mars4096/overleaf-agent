@@ -1,2 +1,5 @@
 .DS_Store
+.cursor/
 node_modules/
+overleaf-agent.settings.json
+.overleaf-agent.json

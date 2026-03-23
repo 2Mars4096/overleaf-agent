@@ -1,0 +1,7 @@
+interface:
+  display_name: "Overleaf Agent"
+  short_description: "Probe and operate Overleaf sessions safely"
+  default_prompt: "Use $overleaf-agent to validate an Overleaf session, inspect routes, or prepare safe read/write probes."
+
+policy:
+  allow_implicit_invocation: true

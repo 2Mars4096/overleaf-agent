@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "discovery": "node tools/overleaf-discovery.mjs"
+    "discovery": "node tools/overleaf-discovery.mjs",
+    "overleaf": "node tools/overleaf-discovery.mjs"
+  },
+  "dependencies": {
+    "socket.io-client": "^0.9.17"
   }
 }
