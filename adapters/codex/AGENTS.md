@@ -22,18 +22,24 @@ The user-facing experience should be natural language. The agent should execute 
 4. Prefer the repo's Overleaf CLI internally instead of inventing raw requests.
    Do not default to telling the user to run these commands themselves.
    - `npm run overleaf -- setup`
+   - `npm run overleaf -- doctor`
    - `npm run overleaf -- status`
    - `npm run overleaf -- connect --cookie-stdin`
    - `npm run overleaf -- disconnect`
+   - `npm run overleaf -- forget-project`
+   - `npm run overleaf -- reset-profile`
    - `npm run overleaf -- validate`
    - `npm run overleaf -- projects`
    - `npm run overleaf -- use-project "<project name or id>"`
    - `npm run overleaf -- snapshot`
    - `npm run overleaf -- read --file-path /main.tex`
    - `npm run overleaf -- edit --file-path /main.tex --text-file ./main.tex`
+   - `npm run overleaf -- compile --root-file main.tex`
+   - `npm run overleaf -- download-pdf --output-file ./paper.pdf`
    - `npm run overleaf -- extract-csrf`
-5. Keep `probe-write` and `probe-refresh` in dry-run mode until a live hosted probe closes those gaps.
-6. Use `docs/overleaf-request-contract.md` for the current source-verified routes and limitations.
+5. Preview mutation commands first, then rerun them with the emitted confirmation token when the reviewed action should be applied.
+6. Keep `probe-write` and `probe-refresh` in dry-run mode until a live hosted probe closes those gaps.
+7. Use `docs/overleaf-request-contract.md` for the current source-verified routes and limitations.
 
 ## Guardrails
 

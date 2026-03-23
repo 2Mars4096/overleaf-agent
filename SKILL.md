@@ -38,7 +38,7 @@ Do not present this as a full editor integration. The repo currently provides a 
    - Do not default to telling the user to run CLI commands themselves. The agent should handle the tool execution.
 
 2. Start from the contract when routes are uncertain.
-   - Run `npm run discovery -- contract`.
+   - Run `npm run overleaf -- contract`.
    - Read `docs/overleaf-request-contract.md` only when you need exact route, header, or limitation details.
 
 3. Prefer the deterministic CLI over ad hoc request snippets, but keep it behind the agent.
@@ -49,15 +49,20 @@ Do not present this as a full editor integration. The repo currently provides a 
    - Only show raw commands when the user explicitly asks for manual CLI usage or debugging details.
    - Normal agent flow:
      - if settings are missing, create them
+     - run doctor when install/runtime health is uncertain
      - if auth is missing, ask for the cookie once and run `connect`
      - validate the session
      - list/select a project
+     - preview mutations, then rerun them with the emitted confirmation token when the action should be applied
      - run read/snapshot/edit/mutation actions internally
    - Internal command examples:
      - `npm run overleaf -- setup`
+     - `npm run overleaf -- doctor`
      - `npm run overleaf -- status`
      - `npm run overleaf -- connect --cookie-stdin`
      - `npm run overleaf -- disconnect`
+     - `npm run overleaf -- forget-project`
+     - `npm run overleaf -- reset-profile`
      - `npm run overleaf -- validate`
      - `npm run overleaf -- projects`
      - `npm run overleaf -- use-project "<project name or id>"`
@@ -65,6 +70,8 @@ Do not present this as a full editor integration. The repo currently provides a 
      - `npm run overleaf -- read --file-path /main.tex`
      - `npm run overleaf -- edit --file-path /main.tex --text-file ./main.tex`
      - `npm run overleaf -- add-doc --file-path /drafts/new.tex`
+     - `npm run overleaf -- compile --root-file main.tex`
+     - `npm run overleaf -- download-pdf --output-file ./paper.pdf`
      - `npm run overleaf -- extract-csrf`
 
 4. Treat live mutations as guarded work.
@@ -75,7 +82,7 @@ Do not present this as a full editor integration. The repo currently provides a 
    - Do not claim that polling-only refresh is safe unless the live host has been validated.
    - Upload and asset workflows remain future scope.
    - Hosted Overleaf validation now covers session validation, project listing, realtime snapshot, HTTP document reads, `add-doc`, and realtime `edit` in a disposable project.
-   - `add-folder`, `rename`, `move`, `delete`, and refresh policy remain partially unvalidated and should still be treated as guarded work.
+   - `add-folder`, `rename`, `move`, `delete`, compile/PDF, and refresh policy remain partially unvalidated and should still be treated as guarded work.
 
 5. Reuse the packaged adapters instead of rewriting the workflow for each host.
    - Codex skill: use this `SKILL.md`.

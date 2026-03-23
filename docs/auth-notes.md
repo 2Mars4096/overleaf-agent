@@ -211,7 +211,7 @@ For file updates:
 Current source-verified caveat:
 - no public cookie-auth HTTP text-write route has been confirmed yet
 - the inspected upstream code routes document writes through the real-time socket path after project/doc join
-- the local CLI now implements that path as `npm run discovery -- edit ...`
+- the local CLI now implements that path as `npm run overleaf -- edit ...`
 - hosted Overleaf live validation confirmed that the realtime polling flow also depends on a handshake-time affinity cookie, so the socket helper keeps an in-memory cookie jar for the session
 
 Current minimum header set for CSRF-protected web `POST`s:
@@ -225,6 +225,7 @@ Current locally implemented mutation routes:
 - `add-doc` and `add-folder` call the web `POST` routes after resolving the parent folder id from the realtime snapshot
 - `rename`, `move`, and `delete` resolve entity ids from the realtime snapshot, then call the CSRF-protected web routes
 - all mutation commands stay guarded behind `sendMutations=true` or `--send`
+- live mutations now emit a confirmation token first; rerun with `--confirm <token>` to apply the reviewed action
 
 ### Near-Realtime Requests
 
@@ -267,9 +268,10 @@ Current canonical contract doc:
 The executable discovery checklist is tracked in [2-1-overleaf-request-discovery](plans/2-1-overleaf-request-discovery.md). The validated answers will be recorded back here once discovery is complete.
 
 Current live-probe entrypoint:
-- `npm run discovery`
+- primary entrypoint: `npm run overleaf`
+- backward-compatible alias: `npm run discovery`
 - the CLI auto-loads `overleaf-agent.settings.json` or `.overleaf-agent.json` if present
-- the first live mutation should happen in a throwaway project or disposable document with `dryRun: false`
+- the first live mutation should happen in a throwaway project or disposable document after previewing the action and rerunning it with `--send --confirm <token>`
 
 ## Auth Abstraction
 

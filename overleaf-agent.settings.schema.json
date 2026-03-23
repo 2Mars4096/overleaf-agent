@@ -37,6 +37,15 @@
     "filePath": {
       "type": "string"
     },
+    "rootFile": {
+      "type": "string"
+    },
+    "compiler": {
+      "type": "string"
+    },
+    "outputFile": {
+      "type": "string"
+    },
     "timeoutMs": {
       "type": "integer",
       "minimum": 1
@@ -110,6 +119,15 @@
           "type": "string"
         },
         "filePath": {
+          "type": "string"
+        },
+        "rootFile": {
+          "type": "string"
+        },
+        "compiler": {
+          "type": "string"
+        },
+        "outputFile": {
           "type": "string"
         },
         "timeoutMs": {

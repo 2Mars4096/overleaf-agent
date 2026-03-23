@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { posix as pathPosix, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname as pathDirname, posix as pathPosix, resolve } from 'node:path';
 import { applyOtUpdate, joinDoc, runSocketSession } from './overleaf-realtime.mjs';
 
 const SECRET_KEYS = new Set(['cookie', 'cookieheader', 'csrf', 'csrftoken', 'authorization', 'auth', 'set-cookie', 'x-csrf-token']);
@@ -10,7 +11,23 @@ const DEFAULT_BASE_URL = 'https://www.overleaf.com';
 const DEFAULT_CONFIG_FILENAMES = ['overleaf-agent.settings.json', '.overleaf-agent.json'];
 const MERGEABLE_SETTINGS_KEYS = new Set(['headers', 'endpoints', 'methods']);
 const DEFAULT_PROFILE_NAME = 'personal';
+const DEFAULT_ROOT_FILE = 'main.tex';
+const DEFAULT_COMPILER = 'pdflatex';
 const EXAMPLE_SETTINGS_URL = new URL('../overleaf-agent.settings.example.json', import.meta.url);
+const PROFILE_RESET_PRESERVE_KEYS = new Set([
+  'baseUrl',
+  'socketUrl',
+  'timeoutMs',
+  'json',
+  'dryRun',
+  'sendMutations',
+  'headers',
+  'endpoints',
+  'methods',
+  'compiler',
+  'rootFile',
+  'outputFile',
+]);
 
 main().catch((error) => {
   const message = error instanceof Error ? error.stack || error.message : String(error);
@@ -43,7 +60,7 @@ function loadConfig(command, options, extraArgs) {
   const settingsState = loadSettingsState(
     firstConfigured(options.config, env.OVERLEAF_CONFIG),
     requestedProfile,
-    { allowMissing: command === 'setup' || command === 'use-project' || command === 'connect' || command === 'disconnect' || command === 'status' }
+    { allowMissing: command === 'setup' || command === 'use-project' || command === 'connect' || command === 'disconnect' || command === 'status' || command === 'doctor' || command === 'forget-project' || command === 'reset-profile' }
   );
   const settings = settingsState.settings;
   const baseUrl = firstConfigured(options.baseUrl, env.OVERLEAF_BASE_URL, settings.baseUrl, DEFAULT_BASE_URL);
@@ -61,6 +78,10 @@ function loadConfig(command, options, extraArgs) {
   const targetPath = firstConfigured(options.targetPath, env.OVERLEAF_TARGET_PATH, settings.targetPath);
   const text = firstConfigured(options.text, env.OVERLEAF_TEXT, settings.text);
   const textFile = firstConfigured(options.textFile, env.OVERLEAF_TEXT_FILE, settings.textFile);
+  const rootFile = firstConfigured(options.rootFile, options.mainFile, env.OVERLEAF_ROOT_FILE, env.OVERLEAF_MAIN_FILE, settings.rootFile, settings.mainFile);
+  const compiler = firstConfigured(options.compiler, env.OVERLEAF_COMPILER, settings.compiler);
+  const outputFile = firstConfigured(options.outputFile, env.OVERLEAF_OUTPUT_FILE, settings.outputFile);
+  const confirm = firstConfigured(options.confirm, env.OVERLEAF_CONFIRM);
   const timeoutMs = numberFrom(firstConfigured(options.timeoutMs, env.OVERLEAF_TIMEOUT_MS, settings.timeoutMs), DEFAULT_TIMEOUT_MS);
   const json = toBoolean(firstConfigured(options.json, env.OVERLEAF_JSON, settings.json));
   const dryRun = toBoolean(firstConfigured(options.dryRun, env.OVERLEAF_DRY_RUN, settings.dryRun, command.startsWith('probe-')));
@@ -103,6 +124,10 @@ function loadConfig(command, options, extraArgs) {
     targetPath,
     text,
     textFile,
+    rootFile,
+    compiler,
+    outputFile,
+    confirm,
     timeoutMs,
     json,
     dryRun,
@@ -212,12 +237,18 @@ async function runCommand(command, config) {
   switch (command) {
     case 'setup':
       return setupLocalConfig(config);
+    case 'doctor':
+      return doctorCommand(config);
     case 'status':
       return connectionStatus(config);
     case 'connect':
       return connectSession(config);
     case 'disconnect':
       return disconnectSession(config);
+    case 'forget-project':
+      return forgetProjectSelection(config);
+    case 'reset-profile':
+      return resetProfile(config);
     case 'validate':
       return requestCommand('validate', config, {
         defaultEndpoint: '/user/projects',
@@ -248,6 +279,10 @@ async function runCommand(command, config) {
       return moveProjectEntity(await resolveProjectConfig(config, 'move', { required: true }));
     case 'delete':
       return deleteProjectEntity(await resolveProjectConfig(config, 'delete', { required: true }));
+    case 'compile':
+      return compileProject(await resolveProjectConfig(config, 'compile', { required: true }));
+    case 'download-pdf':
+      return downloadProjectPdf(await resolveProjectConfig(config, 'download-pdf', { required: true }));
     case 'extract-csrf':
       return extractCsrf(await resolveProjectConfig(config, 'extract-csrf', { required: false }));
     case 'probe-write':
@@ -330,6 +365,116 @@ function connectionStatus(config) {
     notes: connected
       ? ['A stored cookieHeader is available for the active profile.']
       : ['No stored cookieHeader was found for the active profile. Use connect to save one.'],
+  };
+}
+
+async function doctorCommand(config) {
+  const settingsPath = config.settingsPath || resolve(DEFAULT_CONFIG_FILENAMES[0]);
+  const checks = [];
+
+  const requiredFiles = [
+    ['skill', resolve('SKILL.md')],
+    ['cli', resolve('tools/overleaf-discovery.mjs')],
+    ['realtime helper', resolve('tools/overleaf-realtime.mjs')],
+    ['vendored socket client', resolve('vendor/socket.io-client-0.9.17.cjs')],
+  ];
+  for (const [name, path] of requiredFiles) {
+    checks.push({
+      name,
+      status: existsSync(path) ? 'pass' : 'fail',
+      message: existsSync(path) ? `Found ${path}` : `Missing ${path}`,
+    });
+  }
+
+  checks.push({
+    name: 'settings file',
+    status: existsSync(settingsPath) ? 'pass' : 'warn',
+    message: existsSync(settingsPath)
+      ? `Using ${settingsPath}`
+      : `No local settings file found yet. Run setup or connect to create ${settingsPath}.`,
+  });
+
+  checks.push({
+    name: 'stored auth',
+    status: config.cookieHeader ? 'pass' : 'warn',
+    message: config.cookieHeader
+      ? `A cookieHeader is stored for profile ${config.settingsProfile || DEFAULT_PROFILE_NAME}.`
+      : 'No stored cookieHeader was found for the active profile.',
+  });
+
+  checks.push({
+    name: 'stored project',
+    status: config.projectId ? 'pass' : 'warn',
+    message: config.projectId
+      ? `Default project is ${config.projectName || config.projectId}.`
+      : 'No default project is stored yet.',
+  });
+
+  if (config.cookieHeader && !config.dryRun) {
+    try {
+      const catalog = await fetchProjectCatalog(config);
+      checks.push({
+        name: 'session validation',
+        status: 'pass',
+        message: `/user/projects returned ${catalog.projects.length} accessible project(s).`,
+      });
+    } catch (error) {
+      checks.push({
+        name: 'session validation',
+        status: 'fail',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  } else {
+    checks.push({
+      name: 'session validation',
+      status: config.cookieHeader ? 'skip' : 'warn',
+      message: config.cookieHeader
+        ? 'Skipped live validation because dry-run is enabled.'
+        : 'Skipped because no cookieHeader is configured.',
+    });
+  }
+
+  if (config.cookieHeader && config.projectId && !config.dryRun) {
+    try {
+      const snapshot = await loadProjectSnapshot(config);
+      checks.push({
+        name: 'project snapshot',
+        status: 'pass',
+        message: `Realtime snapshot succeeded for ${snapshot.project.name || config.projectId} with ${snapshot.entries.length} entries.`,
+      });
+    } catch (error) {
+      checks.push({
+        name: 'project snapshot',
+        status: 'fail',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  } else {
+    checks.push({
+      name: 'project snapshot',
+      status: config.projectId && config.cookieHeader ? 'skip' : 'warn',
+      message: config.projectId && config.cookieHeader
+        ? 'Skipped because dry-run is enabled.'
+        : 'Skipped because a default project and valid cookie are both required.',
+    });
+  }
+
+  const hasFailure = checks.some(check => check.status === 'fail');
+  const hasWarning = checks.some(check => check.status === 'warn');
+  const nextSteps = [];
+  if (!config.cookieHeader) nextSteps.push('Connect an authenticated Overleaf cookie with connect before attempting live reads or edits.');
+  if (!config.projectId) nextSteps.push('Use use-project to save a default target project for path-based commands.');
+  if (config.cookieHeader && config.projectId) nextSteps.push('Run snapshot or read to inspect the current project, then edit/add-doc with a confirmation token when you are ready to mutate.');
+  if (!nextSteps.length) nextSteps.push('The profile looks ready. Use read, snapshot, compile, or guarded mutation commands as needed.');
+
+  return {
+    label: 'doctor',
+    healthy: !hasFailure && !hasWarning,
+    settingsPath,
+    settingsProfile: config.settingsProfile || firstConfigured(config.requestedProfile, DEFAULT_PROFILE_NAME),
+    checks,
+    nextSteps,
   };
 }
 
@@ -423,6 +568,72 @@ function disconnectSession(config) {
     notes: [
       'Stored cookieHeader and csrfToken were cleared from the selected local profile.',
     ],
+  };
+}
+
+function forgetProjectSelection(config) {
+  const settingsPath = config.settingsPath || resolve(DEFAULT_CONFIG_FILENAMES[0]);
+  if (!existsSync(settingsPath)) {
+    return {
+      label: 'forget-project',
+      cleared: false,
+      settingsPath,
+      notes: ['No local settings file exists, so there was no saved project to clear.'],
+    };
+  }
+
+  const source = readSettingsFile(settingsPath);
+  const profileName = pickWritableProfileName(source, config.requestedProfile);
+  source.profiles ??= {};
+  const nextProfile = { ...(isPlainObject(source.profiles[profileName]) ? source.profiles[profileName] : {}) };
+  delete nextProfile.projectId;
+  delete nextProfile.projectName;
+  delete nextProfile.projectRef;
+  delete nextProfile.fileId;
+  delete nextProfile.docId;
+  delete nextProfile.filePath;
+  source.profiles[profileName] = nextProfile;
+  writeSettingsFile(settingsPath, source);
+
+  return {
+    label: 'forget-project',
+    cleared: true,
+    settingsPath,
+    settingsProfile: profileName,
+    notes: ['Stored project and file selection defaults were cleared from the selected local profile.'],
+  };
+}
+
+function resetProfile(config) {
+  const settingsPath = config.settingsPath || resolve(DEFAULT_CONFIG_FILENAMES[0]);
+  if (!existsSync(settingsPath)) {
+    return {
+      label: 'reset-profile',
+      reset: false,
+      settingsPath,
+      notes: ['No local settings file exists, so there was nothing to reset.'],
+    };
+  }
+
+  const source = readSettingsFile(settingsPath);
+  const profileName = pickWritableProfileName(source, config.requestedProfile);
+  const currentProfile = isPlainObject(source.profiles?.[profileName]) ? source.profiles[profileName] : {};
+  const nextProfile = {};
+  for (const [key, value] of Object.entries(currentProfile)) {
+    if (PROFILE_RESET_PRESERVE_KEYS.has(key)) {
+      nextProfile[key] = value;
+    }
+  }
+  source.profiles ??= {};
+  source.profiles[profileName] = nextProfile;
+  writeSettingsFile(settingsPath, source);
+
+  return {
+    label: 'reset-profile',
+    reset: true,
+    settingsPath,
+    settingsProfile: profileName,
+    notes: ['Stored auth, CSRF state, project selection, file selection, and transient request state were cleared from the selected local profile.'],
   };
 }
 
@@ -762,6 +973,8 @@ async function editDocument(config) {
       fileId: target.id,
       path: target.path,
       previousVersion: currentDoc.version,
+      currentLength: currentText.length,
+      desiredLength: desiredText.length,
       deletedCharacters: sumDeletedCharacters(op),
       insertedCharacters: sumInsertedCharacters(op),
       operationCount: op.length,
@@ -776,17 +989,25 @@ async function editDocument(config) {
       };
     }
 
-    if (!canSendMutation(config)) {
+    const confirmationToken = buildConfirmationToken('edit', config, {
+      fileId: target.id,
+      path: target.path,
+      previousVersion: currentDoc.version,
+      op,
+    });
+
+    if (!canApplyConfirmedMutation(config, confirmationToken)) {
       return {
         label: 'edit',
-        mode: 'dry-run',
+        mode: config.dryRun ? 'dry-run' : 'confirm-required',
         transport: 'socket.io-v0-xhr-polling',
         socketUrl: resolveSocketUrl(config).toString(),
         changed: true,
         update: redactAny({ v: currentDoc.version, op }, config),
+        confirmationToken,
         ...plan,
         notes: [
-          'Pass --send or set sendMutations=true after reviewing the planned OT update.',
+          buildMutationConfirmationNote(config, confirmationToken, 'Review the planned OT update before applying it.'),
         ],
       };
     }
@@ -818,82 +1039,122 @@ async function createProjectEntity(label, config, { endpoint, type }) {
     throw new Error(`${label}: missing required config: name or filePath`);
   }
 
-  if (config.dryRun || !config.sendMutations) {
-    const request = buildRequest({ ...config, csrfToken: config.csrfToken || '<resolved-at-runtime>' }, endpoint, 'POST', {
-      body: JSON.stringify({
-        parent_folder_id: `<resolved-from:${createSpec.parentPath}>`,
-        name: createSpec.name,
-      }, null, 2),
-      contentType: 'application/json',
-    });
+  const snapshot = config.dryRun ? null : await loadProjectSnapshot(config);
+  const parentEntry = snapshot ? resolveFolderTarget(createSpec.parentPath, snapshot.entries, label) : null;
+  if (snapshot && snapshot.entries.some(entry => entry.path === createSpec.path)) {
+    throw new Error(`${label}: an entry already exists at ${createSpec.path}`);
+  }
+
+  const request = buildRequest({ ...config, csrfToken: config.csrfToken || '<resolved-at-runtime>' }, endpoint, 'POST', {
+    body: JSON.stringify({
+      parent_folder_id: parentEntry?.id || `<resolved-from:${createSpec.parentPath}>`,
+      name: createSpec.name,
+    }, null, config.dryRun ? 2 : 0),
+    contentType: 'application/json',
+  });
+  const confirmationToken = buildConfirmationToken(label, config, {
+    path: createSpec.path,
+    parentPath: createSpec.parentPath,
+    parentFolderId: parentEntry?.id || '',
+    name: createSpec.name,
+    type,
+  });
+
+  if (!canApplyConfirmedMutation(config, confirmationToken)) {
     return {
       label,
-      mode: 'dry-run',
+      mode: config.dryRun ? 'dry-run' : 'confirm-required',
       path: createSpec.path,
       parentPath: createSpec.parentPath,
+      parentFolderId: parentEntry?.id || '',
+      confirmationToken,
       request: redactAny(request, config),
       notes: [
-        'A realtime project snapshot is used at runtime to resolve the parent folder id from the requested path.',
-        'Pass --send or set sendMutations=true after reviewing the request.',
+        parentEntry
+          ? 'Resolved the parent folder from the realtime project snapshot.'
+          : 'A realtime project snapshot is used at runtime to resolve the parent folder id from the requested path.',
+        buildMutationConfirmationNote(config, confirmationToken, 'Review the creation target before applying it.'),
       ],
     };
   }
 
-  const snapshot = await loadProjectSnapshot(config);
-  const parentEntry = resolveFolderTarget(createSpec.parentPath, snapshot.entries, label);
   const csrfToken = await ensureCsrfToken(config);
-  const request = buildRequest({ ...config, csrfToken }, endpoint, 'POST', {
+  const liveRequest = buildRequest({ ...config, csrfToken }, endpoint, 'POST', {
     body: JSON.stringify({
       parent_folder_id: parentEntry.id,
       name: createSpec.name,
     }),
     contentType: 'application/json',
   });
-  const response = await executeRequest(request, config);
-  const result = summarizeResponse(label, request, response, { ...config, csrfToken }, endpoint);
+  const response = await executeRequest(liveRequest, config);
+  const result = summarizeResponse(label, liveRequest, response, { ...config, csrfToken }, endpoint);
   const body = parseJson(response.body);
   if (body) {
     result.created = body;
   }
   result.path = createSpec.path;
   result.parentPath = createSpec.parentPath;
+  result.parentFolderId = parentEntry.id;
   return result;
 }
 
 async function renameProjectEntity(config) {
   assertRequired(config, ['baseUrl', 'cookieHeader', 'projectId', 'filePath', 'name'], 'rename');
-  const snapshot = canSendMutation(config) ? await loadProjectSnapshot(config) : null;
   const currentPath = normalizeRemotePath(config.filePath);
   const nextPath = joinRemotePath(dirnameRemotePath(currentPath), config.name);
+  const snapshot = config.dryRun ? null : await loadProjectSnapshot(config);
+  const entry = snapshot ? resolveEntryByPath(snapshot.entries, currentPath) : null;
+  if (entry?.path === '/') {
+    throw new Error('rename: cannot rename the root folder');
+  }
+  if (snapshot) {
+    const conflictingEntry = snapshot.entries.find(candidate => candidate.path === nextPath && candidate.id !== entry.id);
+    if (conflictingEntry) {
+      throw new Error(`rename: target path already exists: ${nextPath}`);
+    }
+  }
+  const endpoint = entry ? `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}/rename` : '/project/${projectId}/<entity-type>/<entity-id>/rename';
+  const request = buildRequest({ ...config, csrfToken: config.csrfToken || '<resolved-at-runtime>' }, endpoint, 'POST', {
+    body: JSON.stringify({ name: config.name }, null, config.dryRun ? 2 : 0),
+    contentType: 'application/json',
+  });
+  const confirmationToken = buildConfirmationToken('rename', config, {
+    path: currentPath,
+    nextPath,
+    entityId: entry?.id || '',
+    entityType: entry?.type || '',
+  });
 
-  if (!canSendMutation(config)) {
+  if (!canApplyConfirmedMutation(config, confirmationToken)) {
     return {
       label: 'rename',
-      mode: 'dry-run',
+      mode: config.dryRun ? 'dry-run' : 'confirm-required',
       path: currentPath,
       nextPath,
+      entityType: entry?.type || '',
+      entityId: entry?.id || '',
+      confirmationToken,
+      request: redactAny(request, config),
       notes: [
-        'The source entity id will be resolved from the realtime project snapshot at runtime.',
-        'Pass --send or set sendMutations=true after reviewing the rename target.',
+        entry
+          ? 'Resolved the entity from the realtime project snapshot.'
+          : 'The source entity id will be resolved from the realtime project snapshot at runtime.',
+        buildMutationConfirmationNote(config, confirmationToken, 'Review the rename target before applying it.'),
       ],
     };
   }
 
-  const entry = resolveEntryByPath(snapshot.entries, currentPath);
-  if (entry.path === '/') {
-    throw new Error('rename: cannot rename the root folder');
-  }
   const csrfToken = await ensureCsrfToken(config);
-  const endpoint = `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}/rename`;
-  const request = buildRequest({ ...config, csrfToken }, endpoint, 'POST', {
+  const liveRequest = buildRequest({ ...config, csrfToken }, `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}/rename`, 'POST', {
     body: JSON.stringify({ name: config.name }),
     contentType: 'application/json',
   });
-  const response = await executeRequest(request, config);
-  const result = summarizeResponse('rename', request, response, { ...config, csrfToken }, endpoint);
+  const response = await executeRequest(liveRequest, config);
+  const result = summarizeResponse('rename', liveRequest, response, { ...config, csrfToken }, endpoint);
   result.path = currentPath;
   result.nextPath = nextPath;
   result.entityType = entry.type;
+  result.entityId = entry.id;
   return result;
 }
 
@@ -901,69 +1162,203 @@ async function moveProjectEntity(config) {
   assertRequired(config, ['baseUrl', 'cookieHeader', 'projectId', 'filePath', 'targetPath'], 'move');
   const currentPath = normalizeRemotePath(config.filePath);
   const destinationPath = normalizeRemotePath(config.targetPath);
+  const snapshot = config.dryRun ? null : await loadProjectSnapshot(config);
+  const entry = snapshot ? resolveEntryByPath(snapshot.entries, currentPath) : null;
+  if (entry?.path === '/') {
+    throw new Error('move: cannot move the root folder');
+  }
+  const folder = snapshot ? resolveFolderTarget(destinationPath, snapshot.entries, 'move') : null;
+  const nextPath = entry ? joinRemotePath(destinationPath, basenameRemotePath(entry.path)) : '';
+  if (snapshot) {
+    const conflictingEntry = snapshot.entries.find(candidate => candidate.path === nextPath && candidate.id !== entry.id);
+    if (conflictingEntry) {
+      throw new Error(`move: target path already exists: ${nextPath}`);
+    }
+  }
+  const endpoint = entry ? `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}/move` : '/project/${projectId}/<entity-type>/<entity-id>/move';
+  const request = buildRequest({ ...config, csrfToken: config.csrfToken || '<resolved-at-runtime>' }, endpoint, 'POST', {
+    body: JSON.stringify({ folder_id: folder?.id || `<resolved-from:${destinationPath}>` }, null, config.dryRun ? 2 : 0),
+    contentType: 'application/json',
+  });
+  const confirmationToken = buildConfirmationToken('move', config, {
+    path: currentPath,
+    targetPath: destinationPath,
+    nextPath,
+    entityId: entry?.id || '',
+    entityType: entry?.type || '',
+    folderId: folder?.id || '',
+  });
 
-  if (!canSendMutation(config)) {
+  if (!canApplyConfirmedMutation(config, confirmationToken)) {
     return {
       label: 'move',
-      mode: 'dry-run',
+      mode: config.dryRun ? 'dry-run' : 'confirm-required',
       path: currentPath,
       targetPath: destinationPath,
+      nextPath,
+      entityType: entry?.type || '',
+      entityId: entry?.id || '',
+      folderId: folder?.id || '',
+      confirmationToken,
+      request: redactAny(request, config),
       notes: [
-        'The source entity id and destination folder id will be resolved from the realtime project snapshot at runtime.',
-        'Pass --send or set sendMutations=true after reviewing the move target.',
+        entry && folder
+          ? 'Resolved the entity and destination folder from the realtime project snapshot.'
+          : 'The source entity id and destination folder id will be resolved from the realtime project snapshot at runtime.',
+        buildMutationConfirmationNote(config, confirmationToken, 'Review the move target before applying it.'),
       ],
     };
   }
 
-  const snapshot = await loadProjectSnapshot(config);
-  const entry = resolveEntryByPath(snapshot.entries, currentPath);
-  if (entry.path === '/') {
-    throw new Error('move: cannot move the root folder');
-  }
-  const folder = resolveFolderTarget(destinationPath, snapshot.entries, 'move');
   const csrfToken = await ensureCsrfToken(config);
-  const endpoint = `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}/move`;
-  const request = buildRequest({ ...config, csrfToken }, endpoint, 'POST', {
+  const liveRequest = buildRequest({ ...config, csrfToken }, `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}/move`, 'POST', {
     body: JSON.stringify({ folder_id: folder.id }),
     contentType: 'application/json',
   });
-  const response = await executeRequest(request, config);
-  const result = summarizeResponse('move', request, response, { ...config, csrfToken }, endpoint);
+  const response = await executeRequest(liveRequest, config);
+  const result = summarizeResponse('move', liveRequest, response, { ...config, csrfToken }, endpoint);
   result.path = currentPath;
   result.targetPath = destinationPath;
+  result.nextPath = nextPath;
   result.entityType = entry.type;
+  result.entityId = entry.id;
+  result.folderId = folder.id;
   return result;
 }
 
 async function deleteProjectEntity(config) {
   assertRequired(config, ['baseUrl', 'cookieHeader', 'projectId', 'filePath'], 'delete');
   const currentPath = normalizeRemotePath(config.filePath);
+  const snapshot = config.dryRun ? null : await loadProjectSnapshot(config);
+  const entry = snapshot ? resolveEntryByPath(snapshot.entries, currentPath) : null;
+  if (entry?.path === '/') {
+    throw new Error('delete: cannot delete the root folder');
+  }
+  const endpoint = entry ? `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}` : '/project/${projectId}/<entity-type>/<entity-id>';
+  const request = buildRequest({ ...config, csrfToken: config.csrfToken || '<resolved-at-runtime>' }, endpoint, 'DELETE');
+  const confirmationToken = buildConfirmationToken('delete', config, {
+    path: currentPath,
+    entityId: entry?.id || '',
+    entityType: entry?.type || '',
+  });
 
-  if (!canSendMutation(config)) {
+  if (!canApplyConfirmedMutation(config, confirmationToken)) {
     return {
       label: 'delete',
-      mode: 'dry-run',
+      mode: config.dryRun ? 'dry-run' : 'confirm-required',
       path: currentPath,
+      entityType: entry?.type || '',
+      entityId: entry?.id || '',
+      confirmationToken,
+      request: redactAny(request, config),
       notes: [
-        'The source entity id will be resolved from the realtime project snapshot at runtime.',
-        'Pass --send or set sendMutations=true after reviewing the delete target.',
+        entry
+          ? 'Resolved the entity from the realtime project snapshot.'
+          : 'The source entity id will be resolved from the realtime project snapshot at runtime.',
+        buildMutationConfirmationNote(config, confirmationToken, 'Review the delete target carefully before applying it.'),
       ],
     };
   }
 
-  const snapshot = await loadProjectSnapshot(config);
-  const entry = resolveEntryByPath(snapshot.entries, currentPath);
-  if (entry.path === '/') {
-    throw new Error('delete: cannot delete the root folder');
-  }
   const csrfToken = await ensureCsrfToken(config);
-  const endpoint = `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}`;
-  const request = buildRequest({ ...config, csrfToken }, endpoint, 'DELETE');
-  const response = await executeRequest(request, config);
-  const result = summarizeResponse('delete', request, response, { ...config, csrfToken }, endpoint);
+  const liveRequest = buildRequest({ ...config, csrfToken }, `/project/\${projectId}/${entityPathSegment(entry.type)}/${entry.id}`, 'DELETE');
+  const response = await executeRequest(liveRequest, config);
+  const result = summarizeResponse('delete', liveRequest, response, { ...config, csrfToken }, endpoint);
   result.path = currentPath;
   result.entityType = entry.type;
+  result.entityId = entry.id;
   return result;
+}
+
+async function compileProject(config) {
+  assertRequired(config, config.dryRun ? ['baseUrl', 'projectId'] : ['baseUrl', 'cookieHeader', 'projectId'], 'compile');
+  const endpoint = config.endpoint || '/project/${projectId}/compile';
+  const csrfToken = config.dryRun ? (config.csrfToken || '<resolved-at-runtime>') : await ensureCsrfToken(config);
+  const request = buildRequest({ ...config, csrfToken }, endpoint, 'POST', {
+    body: JSON.stringify({
+      compile: {
+        options: {
+          compiler: config.compiler || DEFAULT_COMPILER,
+          timeout: Math.max(1, Math.ceil(config.timeoutMs / 1000)),
+        },
+        rootResourcePath: config.rootFile || DEFAULT_ROOT_FILE,
+      },
+    }, null, config.dryRun ? 2 : 0),
+    contentType: 'application/json',
+  });
+
+  if (config.dryRun) {
+    return {
+      label: 'compile',
+      mode: 'dry-run',
+      request: redactAny(request, config),
+      rootFile: config.rootFile || DEFAULT_ROOT_FILE,
+      compiler: config.compiler || DEFAULT_COMPILER,
+      notes: [
+        'This compile request is based on the CLSI-style Overleaf compile API and has not yet been live-validated on hosted Overleaf in this repo.',
+        'Use download-pdf after a successful compile if the target deployment exposes the standard output path.',
+      ],
+    };
+  }
+
+  const response = await executeRequest(request, config);
+  const result = summarizeResponse('compile', request, response, { ...config, csrfToken }, endpoint);
+  const body = parseJson(response.body);
+  if (body?.compile) {
+    result.compile = body.compile;
+    result.compileStatus = body.compile.status || '';
+    result.outputFiles = Array.isArray(body.compile.outputFiles) ? body.compile.outputFiles : [];
+  }
+  result.rootFile = config.rootFile || DEFAULT_ROOT_FILE;
+  result.compiler = config.compiler || DEFAULT_COMPILER;
+  result.notes = [
+    ...(result.notes || []),
+    'This compile route is implemented as a best-effort CLSI-style workflow and still needs live validation against the target Overleaf deployment.',
+  ];
+  return result;
+}
+
+async function downloadProjectPdf(config) {
+  assertRequired(config, config.dryRun ? ['baseUrl', 'projectId'] : ['baseUrl', 'cookieHeader', 'projectId'], 'download-pdf');
+  const endpoint = config.endpoint || '/project/${projectId}/output/output.pdf';
+  const outputFile = resolve(config.outputFile || defaultPdfOutputFile(config));
+  const request = buildRequest(config, endpoint, 'GET', {
+    accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8',
+  });
+
+  if (config.dryRun) {
+    return {
+      label: 'download-pdf',
+      mode: 'dry-run',
+      request: redactAny(request, config),
+      outputFile,
+      notes: [
+        'Downloads the compiled PDF to a local file path.',
+        'The standard output path is inferred from the CLSI output file contract and still needs broader live validation on hosted Overleaf.',
+      ],
+    };
+  }
+
+  const response = await executeBinaryRequest(request, config);
+  mkdirSync(pathDirname(outputFile), { recursive: true });
+  writeFileSync(outputFile, response.body);
+  return {
+    label: 'download-pdf',
+    endpointType: endpoint,
+    outputFile,
+    bytesWritten: response.body.length,
+    request: redactAny(request, config),
+    response: redactAny({
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      bodyPreview: `<binary:${response.body.length} bytes>`,
+    }, config),
+    notes: [
+      'Saved the fetched PDF response to the local output file.',
+      'The standard output path is inferred from the CLSI output file contract and still needs broader live validation on hosted Overleaf.',
+    ],
+  };
 }
 
 async function probeWrite(config) {
@@ -1135,6 +1530,35 @@ function resolveSocketUrl(config) {
 
 function canSendMutation(config) {
   return Boolean(config.sendMutations) && !config.dryRun;
+}
+
+function canApplyConfirmedMutation(config, confirmationToken) {
+  return canSendMutation(config) && String(config.confirm || '') === confirmationToken;
+}
+
+function buildMutationConfirmationNote(config, confirmationToken, message) {
+  if (config.dryRun) {
+    return message;
+  }
+  if (!config.sendMutations) {
+    return `${message} Re-run with --send --confirm ${confirmationToken} to apply it.`;
+  }
+  if (!config.confirm) {
+    return `${message} Re-run with --confirm ${confirmationToken} to apply it.`;
+  }
+  return `${message} The provided --confirm token did not match the current plan; re-run with --confirm ${confirmationToken}.`;
+}
+
+function buildConfirmationToken(label, config, payload) {
+  const digest = createHash('sha256')
+    .update(JSON.stringify({
+      label,
+      projectId: config.projectId || '',
+      payload,
+    }))
+    .digest('hex')
+    .slice(0, 12);
+  return `${label}:${digest}`;
 }
 
 function flattenProjectTree(project) {
@@ -1347,11 +1771,13 @@ function buildRequest(config, endpoint, method, extra = {}) {
   const url = new URL(applyTemplate(endpoint, config), config.baseUrl);
   const headers = new Headers({
     Accept: extra.accept || 'application/json, text/plain, */*',
-    Cookie: config.cookieHeader,
     ...config.headers,
     ...(extra.contentType ? { 'Content-Type': extra.contentType } : {}),
   });
 
+  if (config.cookieHeader) {
+    headers.set('Cookie', config.cookieHeader);
+  }
   if (config.csrfToken) {
     headers.set('X-CSRF-Token', config.csrfToken);
   }
@@ -1390,6 +1816,30 @@ async function executeRequest(request, config) {
       statusText: response.statusText,
       headers: Object.fromEntries(response.headers.entries()),
       body: text,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function executeBinaryRequest(request, config) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error(`Request timed out after ${config.timeoutMs}ms`)), config.timeoutMs);
+
+  try {
+    const response = await fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+      signal: controller.signal,
+    });
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: Buffer.from(await response.arrayBuffer()),
     };
   } finally {
     clearTimeout(timeout);
@@ -1462,6 +1912,14 @@ function printResult(command, result) {
     console.log('Notes:');
     for (const note of result.notes) {
       console.log(`  - ${note}`);
+    }
+  }
+
+  if (Array.isArray(result.checks) && result.checks.length > 0) {
+    console.log('');
+    console.log('Checks:');
+    for (const check of result.checks) {
+      console.log(`  - [${check.status}] ${check.name}: ${check.message}`);
     }
   }
 
@@ -1619,6 +2077,10 @@ function parseArgs(argv) {
         case 'target-path': options.targetPath = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
         case 'text': options.text = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
         case 'text-file': options.textFile = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
+        case 'root-file': options.rootFile = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
+        case 'main-file': options.mainFile = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
+        case 'compiler': options.compiler = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
+        case 'output-file': options.outputFile = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
         case 'endpoint': options.endpoint = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
         case 'method': options.method = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
         case 'timeout-ms': options.timeoutMs = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
@@ -1626,6 +2088,7 @@ function parseArgs(argv) {
         case 'verbose': options.verbose = true; break;
         case 'dry-run': options.dryRun = true; break;
         case 'send': options.send = true; break;
+        case 'confirm': options.confirm = readArgValue(argv, i, inlineValue, key); if (inlineValue === undefined) i += 1; break;
         case 'header': {
           options.header ??= [];
           options.header.push(readArgValue(argv, i, inlineValue, key));
@@ -1685,6 +2148,7 @@ function inferMethod(command) {
     case 'add-folder':
     case 'rename':
     case 'move':
+    case 'compile':
     case 'probe-write':
       return 'POST';
     case 'delete':
@@ -1777,7 +2241,7 @@ function extractMetaContent(html, name) {
 }
 
 function printExtraFields(result) {
-  const handledKeys = new Set(['label', 'mode', 'reason', 'notes', 'found', 'csrfToken', 'request', 'response', 'endpointType', 'projects']);
+  const handledKeys = new Set(['label', 'mode', 'reason', 'notes', 'checks', 'found', 'csrfToken', 'request', 'response', 'endpointType', 'projects']);
   for (const [key, value] of Object.entries(result)) {
     if (handledKeys.has(key) || value === undefined || value === null || value === '') {
       continue;
@@ -1812,9 +2276,12 @@ function printUsage() {
 
 Commands:
   setup           Create or validate a local gitignored settings file
+  doctor          Run a local/self-test readiness check for the active profile
   status          Show whether the active profile has stored Overleaf auth
   connect         Save and validate an Overleaf cookie for the active profile
   disconnect      Clear stored auth from the active profile
+  forget-project  Clear the saved default project and file selection
+  reset-profile   Clear saved auth and transient state while keeping safe defaults
   validate        Validate an authenticated session using a lightweight request
   projects        Fetch the project list
   use-project     Save a default project in the local settings file
@@ -1827,6 +2294,8 @@ Commands:
   rename          Rename a doc, file, or folder resolved by path
   move            Move a doc, file, or folder into another folder path
   delete          Delete a doc, file, or folder resolved by path
+  compile         Trigger a best-effort CLSI-style compile request
+  download-pdf    Download the compiled PDF to a local file
   extract-csrf    Fetch an authenticated HTML page and extract ol-csrfToken
   probe-write     Summarize the verified write path and prepare a safe probe
   probe-refresh   Summarize the verified refresh path and prepare a safe probe
@@ -1852,6 +2321,9 @@ Options:
   --target-path <path>  Destination folder path for move
   --text <text>         Inline replacement text for edit
   --text-file <path>    Read replacement text for edit from a local file
+  --root-file <path>    Root TeX file for compile; defaults to main.tex
+  --compiler <name>     Compiler hint for compile; defaults to pdflatex
+  --output-file <path>  Local output path for download-pdf
   --endpoint <path>     Override the endpoint template
   --method <verb>       Override the HTTP verb
   --header k=v          Add an extra header; repeatable
@@ -1859,6 +2331,7 @@ Options:
   --timeout-ms <n>      Timeout in milliseconds
   --dry-run             Print the request without sending it
   --send                Allow mutation commands to send live requests
+  --confirm <token>     Confirmation token required for live mutations after preview
   --json                Emit machine-readable JSON
   --verbose             Include extra diagnostic detail
 
@@ -1880,6 +2353,10 @@ Environment:
   OVERLEAF_TARGET_PATH
   OVERLEAF_TEXT
   OVERLEAF_TEXT_FILE
+  OVERLEAF_ROOT_FILE
+  OVERLEAF_MAIN_FILE
+  OVERLEAF_COMPILER
+  OVERLEAF_OUTPUT_FILE
   OVERLEAF_ENDPOINT
   OVERLEAF_VALIDATE_ENDPOINT
   OVERLEAF_PROJECTS_ENDPOINT
@@ -1887,6 +2364,7 @@ Environment:
   OVERLEAF_READ_ENDPOINT
   OVERLEAF_WRITE_ENDPOINT
   OVERLEAF_REFRESH_ENDPOINT
+  OVERLEAF_CONFIRM
   OVERLEAF_DRY_RUN=1
   OVERLEAF_SEND_MUTATIONS=1
   OVERLEAF_JSON=1
@@ -1895,4 +2373,13 @@ Settings file auto-discovery:
   ./overleaf-agent.settings.json
   ./.overleaf-agent.json
 `);
+}
+
+function defaultPdfOutputFile(config) {
+  const rawName = config.projectName || config.projectId || 'overleaf-output';
+  const safeName = String(rawName)
+    .trim()
+    .replace(/[^\w.-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'overleaf-output';
+  return `${safeName}.pdf`;
 }

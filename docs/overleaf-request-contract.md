@@ -1,6 +1,6 @@
 # Overleaf Request Contract
 
-**Status:** source-verified on 2026-03-23 from public Overleaf upstream code, implemented locally in the discovery CLI, and partially live-validated on hosted Overleaf on 2026-03-23. Hosted validation now covers `GET /user/projects`, realtime project snapshot, HTTP doc download, disposable `POST /project/:id/doc`, and disposable realtime `applyOtUpdate`. `add-folder`, `rename`, `move`, `delete`, upload/asset handling, and refresh policy still need more live validation.
+**Status:** source-verified on 2026-03-23 from public Overleaf upstream code, implemented locally in the discovery CLI, and partially live-validated on hosted Overleaf on 2026-03-23. Hosted validation now covers `GET /user/projects`, realtime project snapshot, HTTP doc download, disposable `POST /project/:id/doc`, and disposable realtime `applyOtUpdate`. `add-folder`, `rename`, `move`, `delete`, compile/PDF, upload/asset handling, and refresh policy still need more live validation.
 
 ## Auth Prerequisites
 
@@ -74,7 +74,18 @@
   - join the document
   - send `applyOtUpdate`
 - The direct document text-write HTTP route exists only on the private API and is intended for internal service-to-service use.
-- The local CLI now exposes this as `npm run discovery -- edit ...`.
+- The local CLI now exposes this as `npm run overleaf -- edit ...`.
+
+### Compile And PDF
+
+- The Overleaf compile/PDF flow is currently implemented as a best-effort CLSI-style workflow.
+- Implemented local commands:
+  - `compile` uses `POST /project/:Project_id/compile`
+  - `download-pdf` uses `GET /project/:Project_id/output/output.pdf`
+- Status:
+  - inferred from Overleaf's public CLSI API shape
+  - not yet live-validated against hosted Overleaf in this repo
+- Treat these commands as provisional until the target deployment accepts them with a real imported session cookie.
 
 ### Version And Refresh Signals
 
@@ -98,16 +109,19 @@
 
 ## Local Tooling
 
-- Use `npm run discovery -- contract` to print the current source-verified contract.
-- Use `npm run discovery -- validate --base-url <url> --cookie '<cookie>'` for the first live session check.
-- Use `npm run discovery -- snapshot --base-url <url> --cookie '<cookie>' --project-id <id>` to recover the richer realtime project tree with ids.
-- Use `npm run discovery -- read --base-url <url> --cookie '<cookie>' --project-id <id> --file-path /main.tex` when you want path-based doc reads without supplying raw doc ids.
-- Use `npm run discovery -- edit --base-url <url> --cookie '<cookie>' --project-id <id> --file-path /main.tex --text-file ./main.tex --send` for the guarded realtime text-write flow.
-- Use `npm run discovery -- add-doc`, `add-folder`, `rename`, `move`, and `delete` for guarded project mutations after validating a throwaway target.
-- Use `npm run discovery -- extract-csrf --base-url <url> --cookie '<cookie>' --project-id <id>` to recover a live CSRF token from an authenticated HTML page.
+- Use `npm run overleaf -- contract` to print the current source-verified contract.
+- Use `npm run overleaf -- validate --base-url <url> --cookie '<cookie>'` for the first live session check.
+- Use `npm run overleaf -- snapshot --base-url <url> --cookie '<cookie>' --project-id <id>` to recover the richer realtime project tree with ids.
+- Use `npm run overleaf -- read --base-url <url> --cookie '<cookie>' --project-id <id> --file-path /main.tex` when you want path-based doc reads without supplying raw doc ids.
+- Use `npm run overleaf -- edit --base-url <url> --cookie '<cookie>' --project-id <id> --file-path /main.tex --text-file ./main.tex` to preview the guarded realtime text-write flow, then rerun with `--send --confirm <token>`.
+- Use `npm run overleaf -- add-doc`, `add-folder`, `rename`, `move`, and `delete` to preview guarded project mutations after validating a throwaway target, then rerun with `--send --confirm <token>`.
+- Use `npm run overleaf -- doctor` for a local readiness/self-test pass.
+- Use `npm run overleaf -- compile --project-id <id> --root-file main.tex` for the provisional compile flow.
+- Use `npm run overleaf -- download-pdf --project-id <id> --output-file ./paper.pdf` for the provisional PDF fetch flow.
+- Use `npm run overleaf -- extract-csrf --base-url <url> --cookie '<cookie>' --project-id <id>` to recover a live CSRF token from an authenticated HTML page.
 
 ## Remaining Live Checks
 
-- Validate `add-folder`, `rename`, `move`, and `delete` against a disposable hosted project.
+- Validate `add-folder`, `rename`, `move`, `delete`, `compile`, and `download-pdf` against a disposable hosted project.
 - Decide whether refresh can stay HTTP-polling-only, or whether the MVP must depend on the real-time socket path.
 - Confirm how much of the same contract carries over to self-hosted Overleaf deployments.

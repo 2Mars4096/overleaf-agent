@@ -24,18 +24,24 @@ The user should interact in natural language. Claude should run the local Overle
 4. Prefer the local Overleaf CLI internally over ad hoc request construction.
    Do not default to telling the user to run these commands themselves.
    - `npm run overleaf -- setup`
+   - `npm run overleaf -- doctor`
    - `npm run overleaf -- status`
    - `npm run overleaf -- connect --cookie-stdin`
    - `npm run overleaf -- disconnect`
+   - `npm run overleaf -- forget-project`
+   - `npm run overleaf -- reset-profile`
    - `npm run overleaf -- validate`
    - `npm run overleaf -- projects`
    - `npm run overleaf -- use-project "<project name or id>"`
    - `npm run overleaf -- snapshot`
    - `npm run overleaf -- read --file-path /main.tex`
    - `npm run overleaf -- edit --file-path /main.tex --text-file ./main.tex`
+   - `npm run overleaf -- compile --root-file main.tex`
+   - `npm run overleaf -- download-pdf --output-file ./paper.pdf`
    - `npm run overleaf -- extract-csrf`
-5. Treat the request contract as source-verified unless the current hosted instance has been probed live.
-6. Keep write and refresh work gated behind `probe-write` and `probe-refresh` until the live host is validated.
+5. Preview mutation commands first, then rerun them with the emitted confirmation token when the reviewed action should be applied.
+6. Treat the request contract as source-verified unless the current hosted instance has been probed live.
+7. Keep write and refresh work gated behind `probe-write` and `probe-refresh` until the live host is validated.
 
 ## Guardrails
 

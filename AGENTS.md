@@ -14,6 +14,7 @@ The user-facing workflow should be natural language. Run the local Overleaf tool
 4. Prefer the local Overleaf CLI internally over hand-built requests.
    Typical internal commands:
    - `npm run overleaf -- status`
+   - `npm run overleaf -- doctor`
    - `npm run overleaf -- connect --cookie-stdin`
    - `npm run overleaf -- validate`
    - `npm run overleaf -- projects`
@@ -22,10 +23,15 @@ The user-facing workflow should be natural language. Run the local Overleaf tool
    - `npm run overleaf -- read --file-path /main.tex`
    - `npm run overleaf -- edit --file-path /main.tex --text-file ./main.tex`
    - `npm run overleaf -- add-doc --file-path /drafts/new.tex`
+   - `npm run overleaf -- forget-project`
+   - `npm run overleaf -- reset-profile`
+   - `npm run overleaf -- compile --root-file main.tex`
+   - `npm run overleaf -- download-pdf --output-file ./paper.pdf`
    - `npm run overleaf -- extract-csrf`
 5. Treat live mutations as guarded work.
    Hosted Overleaf validation now covers `validate`, `projects`, `snapshot`, `read`, `add-doc`, and realtime `edit` in a disposable project.
-   `add-folder`, `rename`, `move`, `delete`, upload/asset handling, and refresh policy still need more validation.
+   Preview mutation commands first, then rerun them with the emitted confirmation token when the reviewed action should be applied.
+   `add-folder`, `rename`, `move`, `delete`, compile/PDF, upload/asset handling, and refresh policy still need more validation.
 
 ## Guardrails
 
